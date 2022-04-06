@@ -1,9 +1,11 @@
-from data.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, Dataset_Pred
+from data.data_loader import Dataset_ETT_ms, Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, Dataset_Pred
 from exp.exp_basic import Exp_Basic
 from models.model import Informer, InformerStack
 
 from utils.tools import EarlyStopping, adjust_learning_rate
 from utils.metrics import metric
+
+# from r_drop import RDrop
 
 import numpy as np
 
@@ -11,8 +13,6 @@ import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader
-
-torch.set_printoptions(profile="full")
 
 import os
 import time
@@ -30,6 +30,7 @@ class Exp_Informer(Exp_Basic):
             'informerstack':InformerStack,
         }
         if self.args.model=='informer' or self.args.model=='informerstack':
+            #import ipdb; ipdb.set_trace()
             e_layers = self.args.e_layers if self.args.model=='informer' else self.args.s_layers
             model = model_dict[self.args.model](
                 self.args.enc_in,
@@ -54,7 +55,7 @@ class Exp_Informer(Exp_Basic):
                 self.args.mix,
                 self.device
             ).float()
-        
+        # print(model)
         if self.args.use_multi_gpu and self.args.use_gpu:
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
         return model
@@ -63,7 +64,7 @@ class Exp_Informer(Exp_Basic):
         args = self.args
 
         data_dict = {
-            'ETTh1':Dataset_Custom,
+            'ETTh1':Dataset_ETT_hour,
             'ETTh2':Dataset_ETT_hour,
             'ETTm1':Dataset_ETT_minute,
             'ETTm2':Dataset_ETT_minute,
@@ -71,36 +72,40 @@ class Exp_Informer(Exp_Basic):
             'ECL':Dataset_Custom,
             'Solar':Dataset_Custom,
             'custom':Dataset_Custom,
+            'ETTh2ms1f2': Dataset_ETT_ms, # -> ms 
         }
-        Data = data_dict[self.args.data]
-        # 时间特征编码格式
-        # 如果args.embed!='timeF'，timeenc = 0，否则timeenc=1
-        timeenc = 0 if args.embed!='timeF' else 1
+        Data = data_dict[self.args.data] # data.data_loader.Dataset_ETT_ms
+        timeenc = 0 if args.embed!='timeF' else 1 # timeenc=1
 
-        if flag=='test':
+        if flag == 'test':
             shuffle_flag = False; drop_last = True; batch_size = args.batch_size; freq=args.freq
         elif flag=='pred':
             shuffle_flag = False; drop_last = False; batch_size = 1; freq=args.detail_freq
             Data = Dataset_Pred
         else:
-            shuffle_flag = False; drop_last = True; batch_size = args.batch_size; freq=args.freq
-        data_set = Data(
+            shuffle_flag = True; drop_last = True; batch_size = args.batch_size; freq=args.freq
+        #import ipdb; ipdb.set_trace()
+        data_set = Data( # data.data_loader.Dataset_ETT_hour, the name of the class does not matter!
             root_path=args.root_path,
             data_path=args.data_path,
-            flag=flag,
-            size=[args.seq_len, args.label_len, args.pred_len],
-            features=args.features,
-            target=args.target,
-            inverse=args.inverse,
-            timeenc=timeenc,
-            freq=freq,
-            cols=args.cols
+            flag=flag, # 'train'
+            size=[args.seq_len, args.label_len, args.pred_len], # [336, 336, 168] -> [1152, 1152, 576]
+            features=args.features, # "M" -> 'ms'
+            target=args.target, # 'OT' = oil temperature
+            inverse=args.inverse, # False
+            timeenc=timeenc, # 1
+            freq=freq, # 'h' -> 'ms'
+            cols=args.cols, # None
+            train_ratio = args.train_ratio,
+            dev_ratio = args.dev_ratio,
+            test_ratio = args.test_ratio,
         )
-        print(flag, len(data_set))
+        #import ipdb; ipdb.set_trace()
+        print(flag, len(data_set))   # "train 97805"; "val 11867"; "test 11867"
         data_loader = DataLoader(
             data_set,
             batch_size=batch_size,
-            shuffle=False,
+            shuffle=shuffle_flag,
             num_workers=args.num_workers,
             drop_last=drop_last)
 
@@ -114,35 +119,57 @@ class Exp_Informer(Exp_Basic):
         criterion = nn.MSELoss()
         return criterion
 
+    # TODO 修改的新的损失函数
+    # def _select_criterion2(self):
+    #     RDrop_criterion = RDrop()
+    #     return RDrop_criterion
+
+
     def vali(self, vali_data, vali_loader, criterion):
         self.model.eval()
+        #import ipdb; ipdb.set_trace()
         total_loss = []
         for i, (batch_x,batch_y,batch_x_mark,batch_y_mark) in enumerate(vali_loader):
             pred, true = self._process_one_batch(
                 vali_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
-            loss = criterion(pred.detach().cpu(), true.detach().cpu())
+
+            pred1, true1 = self._process_one_batch(
+                vali_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
+
+            # loss = criterion(pred.detach().cpu(), true.detach().cpu())
+            # TODO 原文对回归任务，r_drop使用mse代替KL
+            Lmser = criterion(pred.detach().cpu(), pred1.detach().cpu())
+            Lmse = criterion(pred.detach().cpu(), true.detach().cpu()) + criterion(pred1.detach().cpu(), true.detach().cpu())
+            loss = Lmse + Lmser
+            # loss = criterion(pred.detach().cpu(), true.detach().cpu(), pred1.detach().cpu(), true1.detach().cpu())
+
             total_loss.append(loss)
         total_loss = np.average(total_loss)
         self.model.train()
         return total_loss
 
     def train(self, setting):
-        # train_data、vali_data、test_data都进行drop_last操作
+        #import ipdb; ipdb.set_trace()
         train_data, train_loader = self._get_data(flag = 'train')
-        vali_data, vali_loader = self._get_data(flag='val')
-        test_data, test_loader = self._get_data(flag='test')
+        #import ipdb; ipdb.set_trace()
+        vali_data, vali_loader = self._get_data(flag = 'val')
+        #import ipdb; ipdb.set_trace()
+        test_data, test_loader = self._get_data(flag = 'test')
 
+        #import ipdb; ipdb.set_trace()
         path = os.path.join(self.args.checkpoints, setting)
         if not os.path.exists(path):
             os.makedirs(path)
 
         time_now = time.time()
         
-        train_steps = len(train_loader)
+        train_steps = len(train_loader)   # 3056
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
         
         model_optim = self._select_optimizer()
         criterion = self._select_criterion()
+        # TODO 修改损失函数
+        # criterion = self._select_criterion2()
 
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
@@ -151,21 +178,35 @@ class Exp_Informer(Exp_Basic):
             iter_count = 0
             train_loss = []
             
+            #import ipdb; ipdb.set_trace()
             self.model.train()
             epoch_time = time.time()
             for i, (batch_x,batch_y,batch_x_mark,batch_y_mark) in enumerate(train_loader):
-                # print(len(batch_x))
-                # if i == 0:
-                #     # print("batch_x",batch_x)
-                #     print('batch_y', batch_y)
-
-                # print(batch_x.shape)
+                #import ipdb; ipdb.set_trace()
                 iter_count += 1
                 
                 model_optim.zero_grad()
+                #import ipdb; ipdb.set_trace()
                 pred, true = self._process_one_batch(
                     train_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
-                loss = criterion(pred, true)
+
+                pred1, true1 = self._process_one_batch(
+                    train_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
+                # TODO 三种不同的损失函数计算
+                # 原始的MSE损失函数
+                # loss = criterion(pred, true)
+
+                # 原文对回归任务，r_drop使用mse代替KL
+                Lmser = criterion(pred, pred1)
+                Lmse = criterion(pred, true) + criterion(pred1, true)
+                loss = Lmse + Lmser
+
+                # r_drop使用KL计算
+                # loss = criterion(pred, true, pred1, true1)
+                # print(loss.shape)
+                # print(loss.item())
+                # print(type(loss))
+
                 train_loss.append(loss.item())
                 
                 if (i+1) % 100==0:
@@ -197,7 +238,7 @@ class Exp_Informer(Exp_Basic):
                 break
 
             adjust_learning_rate(model_optim, epoch+1, self.args)
-
+            
         best_model_path = path+'/'+'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
         
