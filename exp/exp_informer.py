@@ -1,4 +1,4 @@
-from data.data_loader import Dataset_ETT_ms, Dataset_ETT_hour, Dataset_ETT_hour2, Dataset_ETT_minute, Dataset_Custom, Dataset_Pred
+from data.data_loader import Dataset_ETT_ms, Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, Dataset_Pred
 from exp.exp_basic import Exp_Basic
 from models.model import Informer, InformerStack
 
@@ -21,7 +21,6 @@ warnings.filterwarnings('ignore')
 class Exp_Informer(Exp_Basic):
     def __init__(self, args):
         super(Exp_Informer, self).__init__(args)
-        #self.debug = args.debug
     
     def _build_model(self):
         model_dict = {
@@ -29,8 +28,7 @@ class Exp_Informer(Exp_Basic):
             'informerstack':InformerStack,
         }
         if self.args.model=='informer' or self.args.model=='informerstack':
-            if self.args.debug:
-                import ipdb; ipdb.set_trace()
+            #import ipdb; ipdb.set_trace()
             e_layers = self.args.e_layers if self.args.model=='informer' else self.args.s_layers
             model = model_dict[self.args.model](
                 self.args.enc_in,
@@ -55,7 +53,7 @@ class Exp_Informer(Exp_Basic):
                 self.args.mix,
                 self.device
             ).float()
-        
+        print(model)
         if self.args.use_multi_gpu and self.args.use_gpu:
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
         return model
@@ -73,7 +71,6 @@ class Exp_Informer(Exp_Basic):
             'Solar':Dataset_Custom,
             'custom':Dataset_Custom,
             'ETTh2ms1f2': Dataset_ETT_ms, # -> ms 
-            'ETTh2f4t1': Dataset_ETT_hour2, # -> ms 
         }
         Data = data_dict[self.args.data] # data.data_loader.Dataset_ETT_ms
         timeenc = 0 if args.embed!='timeF' else 1 # timeenc=1
@@ -85,9 +82,7 @@ class Exp_Informer(Exp_Basic):
             Data = Dataset_Pred
         else:
             shuffle_flag = True; drop_last = True; batch_size = args.batch_size; freq=args.freq
-
-        if args.debug:
-            import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         data_set = Data( # data.data_loader.Dataset_ETT_hour, the name of the class does not matter!
             root_path=args.root_path,
             data_path=args.data_path,
@@ -102,11 +97,9 @@ class Exp_Informer(Exp_Basic):
             train_ratio = args.train_ratio,
             dev_ratio = args.dev_ratio,
             test_ratio = args.test_ratio,
-            debug = args.debug,
         )
-        if args.debug:
-            import ipdb; ipdb.set_trace()
-        print(flag, len(data_set)) # "train 97805"; "val 11867"; "test 11867" 
+        #import ipdb; ipdb.set_trace()
+        print(flag, len(data_set))   # "train 97805"; "val 11867"; "test 11867"
         data_loader = DataLoader(
             data_set,
             batch_size=batch_size,
@@ -121,13 +114,12 @@ class Exp_Informer(Exp_Basic):
         return model_optim
     
     def _select_criterion(self):
-        criterion =  nn.MSELoss()
+        criterion = nn.MSELoss()
         return criterion
 
     def vali(self, vali_data, vali_loader, criterion):
         self.model.eval()
-        if self.args.debug:
-            import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         total_loss = []
         for i, (batch_x,batch_y,batch_x_mark,batch_y_mark) in enumerate(vali_loader):
             pred, true = self._process_one_batch(
@@ -139,25 +131,21 @@ class Exp_Informer(Exp_Basic):
         return total_loss
 
     def train(self, setting):
-        if self.args.debug:
-            import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         train_data, train_loader = self._get_data(flag = 'train')
-        if self.args.debug:
-            import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         vali_data, vali_loader = self._get_data(flag = 'val')
-        if self.args.debug:
-            import ipdb; ipdb.set_trace()
+        #import ipdb; ipdb.set_trace()
         test_data, test_loader = self._get_data(flag = 'test')
-        
-        if self.args.debug:
-            import ipdb; ipdb.set_trace()
+
+        #import ipdb; ipdb.set_trace()
         path = os.path.join(self.args.checkpoints, setting)
         if not os.path.exists(path):
             os.makedirs(path)
 
         time_now = time.time()
         
-        train_steps = len(train_loader) # 3056
+        train_steps = len(train_loader)   # 3056
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
         
         model_optim = self._select_optimizer()
@@ -170,18 +158,15 @@ class Exp_Informer(Exp_Basic):
             iter_count = 0
             train_loss = []
             
-            if self.args.debug:
-                import ipdb; ipdb.set_trace()
+            #import ipdb; ipdb.set_trace()
             self.model.train()
             epoch_time = time.time()
             for i, (batch_x,batch_y,batch_x_mark,batch_y_mark) in enumerate(train_loader):
-                if self.args.debug:
-                    import ipdb; ipdb.set_trace()
+                #import ipdb; ipdb.set_trace()
                 iter_count += 1
                 
                 model_optim.zero_grad()
-                if self.args.debug:
-                    import ipdb; ipdb.set_trace()
+                #import ipdb; ipdb.set_trace()
                 pred, true = self._process_one_batch(
                     train_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
                 loss = criterion(pred, true)
@@ -211,7 +196,7 @@ class Exp_Informer(Exp_Basic):
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
                 epoch + 1, train_steps, train_loss, vali_loss, test_loss))
             early_stopping(vali_loss, self.model, path)
-            if early_stopping.early_stop: # and epoch == self.args.train_epochs-1:
+            if early_stopping.early_stop:
                 print("Early stopping")
                 break
 
