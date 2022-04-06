@@ -5,8 +5,6 @@ from models.model import Informer, InformerStack
 from utils.tools import EarlyStopping, adjust_learning_rate
 from utils.metrics import metric
 
-# from r_drop import RDrop
-
 import numpy as np
 
 import torch
@@ -55,7 +53,7 @@ class Exp_Informer(Exp_Basic):
                 self.args.mix,
                 self.device
             ).float()
-        # print(model)
+        print(model)
         if self.args.use_multi_gpu and self.args.use_gpu:
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
         return model
@@ -119,12 +117,6 @@ class Exp_Informer(Exp_Basic):
         criterion = nn.MSELoss()
         return criterion
 
-    # TODO 修改的新的损失函数
-    # def _select_criterion2(self):
-    #     RDrop_criterion = RDrop()
-    #     return RDrop_criterion
-
-
     def vali(self, vali_data, vali_loader, criterion):
         self.model.eval()
         #import ipdb; ipdb.set_trace()
@@ -132,17 +124,7 @@ class Exp_Informer(Exp_Basic):
         for i, (batch_x,batch_y,batch_x_mark,batch_y_mark) in enumerate(vali_loader):
             pred, true = self._process_one_batch(
                 vali_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
-
-            pred1, true1 = self._process_one_batch(
-                vali_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
-
-            # loss = criterion(pred.detach().cpu(), true.detach().cpu())
-            # TODO 原文对回归任务，r_drop使用mse代替KL
-            Lmser = criterion(pred.detach().cpu(), pred1.detach().cpu())
-            Lmse = criterion(pred.detach().cpu(), true.detach().cpu()) + criterion(pred1.detach().cpu(), true.detach().cpu())
-            loss = Lmse + Lmser
-            # loss = criterion(pred.detach().cpu(), true.detach().cpu(), pred1.detach().cpu(), true1.detach().cpu())
-
+            loss = criterion(pred.detach().cpu(), true.detach().cpu())
             total_loss.append(loss)
         total_loss = np.average(total_loss)
         self.model.train()
@@ -167,9 +149,7 @@ class Exp_Informer(Exp_Basic):
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
         
         model_optim = self._select_optimizer()
-        criterion = self._select_criterion()
-        # TODO 修改损失函数
-        # criterion = self._select_criterion2()
+        criterion =  self._select_criterion()
 
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
@@ -189,24 +169,7 @@ class Exp_Informer(Exp_Basic):
                 #import ipdb; ipdb.set_trace()
                 pred, true = self._process_one_batch(
                     train_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
-
-                pred1, true1 = self._process_one_batch(
-                    train_data, batch_x, batch_y, batch_x_mark, batch_y_mark)
-                # TODO 三种不同的损失函数计算
-                # 原始的MSE损失函数
-                # loss = criterion(pred, true)
-
-                # 原文对回归任务，r_drop使用mse代替KL
-                Lmser = criterion(pred, pred1)
-                Lmse = criterion(pred, true) + criterion(pred1, true)
-                loss = Lmse + Lmser
-
-                # r_drop使用KL计算
-                # loss = criterion(pred, true, pred1, true1)
-                # print(loss.shape)
-                # print(loss.item())
-                # print(type(loss))
-
+                loss = criterion(pred, true)
                 train_loss.append(loss.item())
                 
                 if (i+1) % 100==0:
